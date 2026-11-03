@@ -1,0 +1,49 @@
+# Environment & Credentials
+.env
+.env.local
+.env.*.local
+
+# Python & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Runtime binaries & environments
+python_runtime/
+
+# Database & Runtime Logs (keep repo clean and credential-safe)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+data/*
+!data/.gitkeep
+*.log
+*.log.gz
+service.log
+database.sqlite
+
+# Frontend Dependencies & Temporary Files
+frontend/node_modules/
+frontend/.vite/
+
+# Temporary / Scratch & Local Backups
+scratch/
+scratch_raw_jsp.html
+scratch_raw_web.html
+snapshots/
+
+# IDE & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.gemini/

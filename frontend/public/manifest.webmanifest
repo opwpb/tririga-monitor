@@ -1,0 +1,53 @@
+{
+  "name": "TRIRIGA Log & License Analyzer",
+  "short_name": "TRIRIGA Monitor",
+  "description": "Real-time TRIRIGA Monitoring, Log Analysis & License Auditor",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020617",
+  "theme_color": "#090d16",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": [
+    "utilities",
+    "productivity",
+    "developer tools"
+  ],
+  "shortcuts": [
+    {
+      "name": "Live Server Activity",
+      "short_name": "Live Activity",
+      "description": "View live TRIRIGA server telemetry and active users",
+      "url": "./#live",
+      "icons": [{ "src": "./icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "License Auditor",
+      "short_name": "Licenses",
+      "description": "Inspect license allocations and dormant accounts",
+      "url": "./#licenses",
+      "icons": [{ "src": "./icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
