@@ -714,3 +714,44 @@ def test_near_concurrency_log_search():
 
 
 
+
+
+@pytest.mark.anyio
+async def test_mas_apppoints_sizing_service():
+    from backend.app.services.mas_sizing_service import MasSizingService
+    from backend.main import app
+
+    mock_license_data = {
+        "license_entitlements": [
+            {"product_id": 3050, "license_name": "IBM Facilities & RE on Cloud Enterprise", "entitled_count": 25, "assigned_count": 24, "active_count": 2},
+            {"product_id": 3053, "license_name": "IBM Facilities & RE Occasional Enterprise", "entitled_count": 200, "assigned_count": 298, "active_count": 5},
+            {"product_id": 3048, "license_name": "Approvals and Reporting", "entitled_count": 200, "assigned_count": 208, "active_count": 3},
+            {"product_id": 3018, "license_name": "IBM Facilities & RE on Cloud Self Service", "entitled_count": 1000, "assigned_count": 0, "active_count": 0},
+        ],
+        "consumption_over_time": [
+            {"date": "2026-09-01", "total_concurrent": 10, "Occasional Enterprise_concurrent": 5, "Enterprise_concurrent": 2, "Approvals & Reporting_concurrent": 3},
+            {"date": "2026-09-02", "total_concurrent": 12, "Occasional Enterprise_concurrent": 6, "Enterprise_concurrent": 3, "Approvals & Reporting_concurrent": 3},
+        ],
+        "dormant_summary": {
+            "never_logged_in_count": 380,
+            "high_priority_reclaimable": 376
+        },
+        "logged_in_users": [{"user_id": "1"}, {"user_id": "2"}]
+    }
+
+    res = MasSizingService.calculate_sizing(mock_license_data, buffer_percent=20.0, include_reserve_addon=True, reserve_user_population=4000)
+    assert res["success"] is True
+    assert res["overall_peak_concurrent"] == 12
+    assert res["recommended_sizing"]["total_apppoints"] > 0
+    assert len(res["scenarios"]) == 4
+    assert res["reserve_addon"]["points"] == 20
+
+    # Test API endpoint
+    client = get_auth_client(app)
+    api_res = client.get("/api/operations/mas-sizing?buffer_pct=25&include_reserve=true&reserve_users=5000")
+    assert api_res.status_code == 200
+    data = api_res.json()
+    assert data["success"] is True
+    assert "recommended_sizing" in data
+    assert "module_conversions" in data
+    assert "optimization_insights" in data

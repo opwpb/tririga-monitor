@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse, Response
 from typing import Dict, Any, Optional
 from ..db.database import db_read_session, dict_from_row
 from ..services.operations_service import OperationsService
+from ..services.mas_sizing_service import MasSizingService
 
 router = APIRouter(prefix="/api/operations", tags=["TRIRIGA Operations Hub"])
 
@@ -163,4 +164,27 @@ async def export_users_csv(
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Type": "text/csv; charset=utf-8"
         }
+    )
+
+
+@router.get("/mas-sizing")
+async def get_mas_sizing(
+    server_id: Optional[int] = Query(None),
+    buffer_pct: float = Query(20.0, description="Buffer percentage for safety headroom (e.g. 20.0)"),
+    include_reserve: bool = Query(True, description="Whether to include Reserve add-on module tier points"),
+    reserve_users: int = Query(4000, description="Estimated total user population accessing reservation desks/rooms")
+):
+    """
+    Computes IBM Maximo Application Suite (MAS) and Maximo Real Estate and Facilities (MREF)
+    AppPoints sizing, license conversion modeling, and audited utilization forecasting.
+    """
+    server = _get_server(server_id)
+    server_copy = dict(server)
+    server_copy["_is_cluster_wide"] = True
+    license_data = await OperationsService.get_license_usage(server_copy)
+    return MasSizingService.calculate_sizing(
+        license_usage_data=license_data,
+        buffer_percent=buffer_pct,
+        include_reserve_addon=include_reserve,
+        reserve_user_population=reserve_users
     )

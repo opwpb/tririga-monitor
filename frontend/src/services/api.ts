@@ -546,6 +546,24 @@ export const api = {
     return res.json();
   },
 
+  async getMasSizing(params?: {
+    serverId?: number;
+    bufferPct?: number;
+    includeReserve?: boolean;
+    reserveUsers?: number;
+  }): Promise<any> {
+    const q = new URLSearchParams();
+    if (params?.serverId !== undefined) q.set('server_id', String(params.serverId));
+    if (params?.bufferPct !== undefined) q.set('buffer_pct', String(params.bufferPct));
+    if (params?.includeReserve !== undefined) q.set('include_reserve', String(params.includeReserve));
+    if (params?.reserveUsers !== undefined) q.set('reserve_users', String(params.reserveUsers));
+    const qs = q.toString();
+    const url = qs ? `${BASE_URL}/operations/mas-sizing?${qs}` : `${BASE_URL}/operations/mas-sizing`;
+    const res = await perfFetch(url);
+    if (!res.ok) throw new Error('Failed to fetch MAS AppPoints sizing');
+    return res.json();
+  },
+
   async getUserDirectory(params?: {
     serverId?: number;
     status?: string;

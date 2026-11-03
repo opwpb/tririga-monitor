@@ -46,6 +46,7 @@ import { ActiveUsersTable } from './user_activity/ActiveUsersTable';
 import { SessionAuditTable } from './user_activity/SessionAuditTable';
 import { LicenseVisualAnalytics } from './user_activity/LicenseVisualAnalytics';
 import { UserDirectoryTable } from './user_activity/UserDirectoryTable';
+import { MasAppPointSizingTool } from './user_activity/MasAppPointSizingTool';
 
 interface UserActivityProps {
   servers: TririgaServer[];
@@ -901,6 +902,21 @@ Please evaluate:
               CSV Export
             </span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('mas_sizing')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeTab === 'mas_sizing'
+                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span>MAS AppPoints Sizing</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/20 text-indigo-300 font-mono font-bold">
+              MREF 9.2
+            </span>
+          </button>
         </div>
 
         {/* Global Account Type Selector and Search */}
@@ -1019,6 +1035,14 @@ Please evaluate:
           accountTypeFilter={accountTypeFilter}
           onAccountTypeChange={setAccountTypeFilter}
           rawDormantUsers={licenseData?.dormant_users || []}
+        />
+      )}
+
+      {/* TAB 7: MAS APPPOINTS SIZING TOOL */}
+      {activeTab === 'mas_sizing' && (
+        <MasAppPointSizingTool
+          licenseData={licenseData}
+          selectedServerInfo={selectedServerInfo}
         />
       )}
 
