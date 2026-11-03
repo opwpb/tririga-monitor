@@ -285,6 +285,50 @@ async def test_operations_service_and_endpoints():
     assert res_parity.json()["success"] is True
     assert "clusters" in res_parity.json()
 
+@pytest.mark.anyio
+async def test_license_concurrency_consumption_analytics():
+    from unittest.mock import patch
+    from backend.app.services.operations_service import OperationsService
+
+    server_info = {'id': 999, 'name': 'Test Server', 'host': 'localhost', 'port': 8001, 'protocol': 'http', 'admin_path': '/admin'}
+    
+    mock_over_time = {
+        'success': True,
+        'rows': [
+            {'LOGIN_DATE': '2026-09-01', 'PRODUCT_ID': '3053', 'UNIQUE_USERS': '25', 'SESS_COUNT': '50'},
+            {'LOGIN_DATE': '2026-09-01', 'PRODUCT_ID': '3050', 'UNIQUE_USERS': '10', 'SESS_COUNT': '20'},
+            {'LOGIN_DATE': '2026-09-02', 'PRODUCT_ID': '3053', 'UNIQUE_USERS': '30', 'SESS_COUNT': '60'},
+        ]
+    }
+    mock_concurrent = {
+        'success': True,
+        'rows': [
+            {'LOGIN_DATE': '2026-09-01', 'PRODUCT_ID': '3053', 'MAX_CONCURRENT': '18'},
+            {'LOGIN_DATE': '2026-09-01', 'PRODUCT_ID': '3050', 'MAX_CONCURRENT': '7'},
+            {'LOGIN_DATE': '2026-09-02', 'PRODUCT_ID': '3053', 'MAX_CONCURRENT': '22'},
+        ]
+    }
+    
+    async def mock_exec(server, sql, limit=3000):
+        if 'MAX_CONCURRENT' in sql:
+            return mock_concurrent
+        if 'UNIQUE_USERS' in sql:
+            return mock_over_time
+        return {'success': True, 'rows': []}
+
+    with patch('backend.app.services.tririga_admin_client.TririgaAdminClient.execute_query_via_admin_console', side_effect=mock_exec):
+        res = await OperationsService.get_license_usage(server_info)
+        assert res['success'] is True
+        cot = res.get('consumption_over_time', [])
+        assert len(cot) >= 2
+        for p in cot:
+            by_p = p.get('by_product', {})
+            if 'Occasional Enterprise' in by_p:
+                assert 'max_concurrent' in by_p['Occasional Enterprise']
+                assert 'concurrent' in by_p['Occasional Enterprise']
+            assert 'total_concurrent' in p
+            assert 'Occasional Enterprise_concurrent' in p
+
 
 def test_server_reconfiguration_and_clustering():
     from backend.main import app

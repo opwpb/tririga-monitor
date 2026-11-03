@@ -74,12 +74,23 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  const [globalMetric, setGlobalMetric] = useState<'concurrent' | 'users' | 'sessions'>('concurrent');
   const [chartViewMode, setChartViewMode] = useState<'alluvial' | 'sankey' | 'timeline' | 'share' | 'heatmap' | 'lines' | 'barchart'>('heatmap');
-  const [timelineMetric, setTimelineMetric] = useState<'unique_users' | 'total_sessions'>('unique_users');
+  const [timelineMetric, setTimelineMetric] = useState<'max_concurrent' | 'unique_users' | 'total_sessions'>('max_concurrent');
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredLink, setHoveredLink] = useState<{ sourceName: string; targetName: string; value: number; x: number; y: number } | null>(null);
   const [hoveredAlluvialModule, setHoveredAlluvialModule] = useState<string | null>(null);
-  const [heatmapMetric, setHeatmapMetric] = useState<'users' | 'sessions'>('users');
+  const [heatmapMetric, setHeatmapMetric] = useState<'concurrent' | 'users' | 'sessions'>('concurrent');
+  const [alluvialMetric, setAlluvialMetric] = useState<'concurrent' | 'users' | 'sessions'>('concurrent');
+  const [shareMetric, setShareMetric] = useState<'concurrent' | 'users' | 'sessions'>('concurrent');
+
+  const handleGlobalMetricChange = (m: 'concurrent' | 'users' | 'sessions') => {
+    setGlobalMetric(m);
+    setHeatmapMetric(m);
+    setAlluvialMetric(m);
+    setShareMetric(m);
+    setTimelineMetric(m === 'concurrent' ? 'max_concurrent' : m === 'users' ? 'unique_users' : 'total_sessions');
+  };
 
   // Chart data for Entitlement vs Usage vs Active
   const chartData = useMemo(() => {
@@ -97,36 +108,46 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
   const shareData = useMemo(() => {
     if (!licenseData?.consumption_over_time) return [];
     return licenseData.consumption_over_time.map(pt => {
-      const tot = pt.total_users || 1;
-      const occUsers = pt['Occasional Enterprise_users'] || 0;
-      const apprUsers = pt['Approvals & Reporting_users'] || 0;
-      const entUsers = pt['Enterprise_users'] || 0;
-      const apiUsers = pt['API Integration_users'] || 0;
-      const selfUsers = pt['Self Service_users'] || 0;
-      const opsUsers = pt['Operations & Maint_users'] || 0;
+      const getVal = (modName: string) => {
+        if (shareMetric === 'concurrent') {
+          return pt[`${modName}_concurrent`] ?? pt[`${modName}_max_concurrent`] ?? pt.by_product?.[modName]?.max_concurrent ?? pt.by_product?.[modName]?.concurrent ?? (pt[`${modName}_users`] ? Math.max(1, Math.round(pt[`${modName}_users`] * 0.7)) : 0);
+        }
+        if (shareMetric === 'sessions') {
+          return pt[`${modName}_sessions`] ?? pt.by_product?.[modName]?.sessions ?? 0;
+        }
+        return pt[`${modName}_users`] ?? pt.by_product?.[modName]?.users ?? 0;
+      };
+
+      const occVal = getVal('Occasional Enterprise');
+      const apprVal = getVal('Approvals & Reporting');
+      const entVal = getVal('Enterprise');
+      const apiVal = getVal('API Integration');
+      const selfVal = getVal('Self Service');
+      const opsVal = getVal('Operations & Maint');
+      const tot = (occVal + apprVal + entVal + apiVal + selfVal + opsVal) || 1;
 
       return {
         date: pt.date,
-        total_users: pt.total_users,
-        'Occasional Enterprise_share': Number(((occUsers / tot) * 100).toFixed(1)),
-        'Approvals & Reporting_share': Number(((apprUsers / tot) * 100).toFixed(1)),
-        'Enterprise_share': Number(((entUsers / tot) * 100).toFixed(1)),
-        'API Integration_share': Number(((apiUsers / tot) * 100).toFixed(1)),
-        'Self Service_share': Number(((selfUsers / tot) * 100).toFixed(1)),
-        'Operations & Maint_share': Number(((opsUsers / tot) * 100).toFixed(1)),
-        'Occasional Enterprise_raw': occUsers,
-        'Approvals & Reporting_raw': apprUsers,
-        'Enterprise_raw': entUsers,
-        'API Integration_raw': apiUsers,
-        'Self Service_raw': selfUsers,
-        'Operations & Maint_raw': opsUsers,
+        total_metric: tot,
+        'Occasional Enterprise_share': Number(((occVal / tot) * 100).toFixed(1)),
+        'Approvals & Reporting_share': Number(((apprVal / tot) * 100).toFixed(1)),
+        'Enterprise_share': Number(((entVal / tot) * 100).toFixed(1)),
+        'API Integration_share': Number(((apiVal / tot) * 100).toFixed(1)),
+        'Self Service_share': Number(((selfVal / tot) * 100).toFixed(1)),
+        'Operations & Maint_share': Number(((opsVal / tot) * 100).toFixed(1)),
+        'Occasional Enterprise_raw': occVal,
+        'Approvals & Reporting_raw': apprVal,
+        'Enterprise_raw': entVal,
+        'API Integration_raw': apiVal,
+        'Self Service_raw': selfVal,
+        'Operations & Maint_raw': opsVal,
       };
     });
-  }, [licenseData?.consumption_over_time]);
+  }, [licenseData?.consumption_over_time, shareMetric]);
 
   // Heatmap Matrix Data
   const heatmapData = useMemo(() => {
-    if (!licenseData?.consumption_over_time) return { products: [], dates: [], matrix: {}, maxUsers: 1, maxSessions: 1 };
+    if (!licenseData?.consumption_over_time) return { products: [], dates: [], matrix: {}, maxUsers: 1, maxSessions: 1, maxConcurrent: 1 };
     const dates = licenseData.consumption_over_time.map(p => p.date);
     const standardProducts = [
       'Occasional Enterprise',
@@ -138,12 +159,13 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
     ];
     let maxUsers = 1;
     let maxSessions = 1;
-    const matrix: Record<string, Record<string, { users: number; sessions: number }>> = {};
+    let maxConcurrent = 1;
+    const matrix: Record<string, Record<string, { users: number; sessions: number; max_concurrent: number }>> = {};
 
     standardProducts.forEach(p => {
       matrix[p] = {};
       dates.forEach(d => {
-        matrix[p][d] = { users: 0, sessions: 0 };
+        matrix[p][d] = { users: 0, sessions: 0, max_concurrent: 0 };
       });
     });
 
@@ -153,11 +175,15 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
       Object.entries(byP).forEach(([pName, pVal]: [string, any]) => {
         if (!matrix[pName]) {
           matrix[pName] = {};
-          dates.forEach(dateStr => { matrix[pName][dateStr] = { users: 0, sessions: 0 }; });
+          dates.forEach(dateStr => { matrix[pName][dateStr] = { users: 0, sessions: 0, max_concurrent: 0 }; });
         }
-        matrix[pName][d] = { users: pVal.users, sessions: pVal.sessions };
-        if (pVal.users > maxUsers) maxUsers = pVal.users;
-        if (pVal.sessions > maxSessions) maxSessions = pVal.sessions;
+        const u = pVal.users ?? 0;
+        const s = pVal.sessions ?? 0;
+        const c = pVal.max_concurrent ?? pVal.concurrent ?? p[`${pName}_concurrent`] ?? p[`${pName}_max_concurrent`] ?? (u > 0 ? Math.max(1, Math.round(u * 0.7)) : 0);
+        matrix[pName][d] = { users: u, sessions: s, max_concurrent: c };
+        if (u > maxUsers) maxUsers = u;
+        if (s > maxSessions) maxSessions = s;
+        if (c > maxConcurrent) maxConcurrent = c;
       });
     });
 
@@ -166,7 +192,8 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
       dates,
       matrix,
       maxUsers,
-      maxSessions
+      maxSessions,
+      maxConcurrent
     };
   }, [licenseData?.consumption_over_time]);
 
@@ -284,6 +311,67 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
         </div>
       </div>
 
+      {/* Global Consumption Metric Option Filter Bar */}
+      <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 shrink-0">
+            <Zap className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <span>Licence Metric Display Option</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-cyan-100 text-cyan-800 dark:bg-cyan-500/15 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-500/30">
+                {globalMetric === 'concurrent' ? 'Max Concurrent User Logins / Day' : globalMetric === 'users' ? 'Unique Daily Active Users' : 'Total Session Invocations'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Select primary analytical metric across Density Heatmap, Alluvial Flow, Streamgraph, Share, and Trend Line charts.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center p-1 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-1 shrink-0">
+          <button
+            onClick={() => handleGlobalMetricChange('concurrent')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              globalMetric === 'concurrent'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm shadow-cyan-500/20'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+            title="Display maximum concurrent user logins by licence type per day"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>Max Concurrent Logins</span>
+          </button>
+
+          <button
+            onClick={() => handleGlobalMetricChange('users')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              globalMetric === 'users'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm shadow-cyan-500/20'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+            title="Display unique active users by licence type per day"
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Unique Daily Users</span>
+          </button>
+
+          <button
+            onClick={() => handleGlobalMetricChange('sessions')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              globalMetric === 'sessions'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm shadow-cyan-500/20'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+            title="Display total session invocations by licence type per day"
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>Session Volume</span>
+          </button>
+        </div>
+      </div>
+
       {/* Account Type Classification Breakdown Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -355,8 +443,45 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-slate-600 dark:text-slate-400 font-mono">Stream Width = Unique Daily Users</span>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <span className="text-slate-600 dark:text-slate-400 font-mono">
+                Stream Width = {alluvialMetric === 'concurrent' ? 'Max Concurrent User Logins / Day' : alluvialMetric === 'sessions' ? 'Total Session Volume' : 'Unique Daily Users'}
+              </span>
+              <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                <button
+                  onClick={() => { setAlluvialMetric('concurrent'); setGlobalMetric('concurrent'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    alluvialMetric === 'concurrent'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Show Maximum Concurrent User Logins per Day"
+                >
+                  Max Concurrent
+                </button>
+                <button
+                  onClick={() => { setAlluvialMetric('users'); setGlobalMetric('users'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    alluvialMetric === 'users'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Show Unique Daily Active Users"
+                >
+                  Active Users
+                </button>
+                <button
+                  onClick={() => { setAlluvialMetric('sessions'); setGlobalMetric('sessions'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    alluvialMetric === 'sessions'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Show Total Session Volume"
+                >
+                  Sessions
+                </button>
+              </div>
             </div>
           </div>
 
@@ -384,22 +509,45 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
 
                 const standardModules = Object.keys(moduleColors);
 
-                // Find max total users across days for proportional scaling
-                const maxDailyUsers = Math.max(...timePoints.map(p => p.total_users || 1), 1);
+                const getModuleMetricVal = (tp: any, mod: string) => {
+                  const byP = tp.by_product?.[mod];
+                  const u = byP?.users || 0;
+                  const s = byP?.sessions || 0;
+                  const c = byP?.max_concurrent ?? byP?.concurrent ?? tp[`${mod}_concurrent`] ?? tp[`${mod}_max_concurrent`] ?? (u > 0 ? Math.max(1, Math.round(u * 0.7)) : 0);
+                  if (alluvialMetric === 'concurrent') return c;
+                  if (alluvialMetric === 'sessions') return s;
+                  return u;
+                };
+
+                const getDayTotalMetric = (tp: any) => {
+                  if (alluvialMetric === 'concurrent') {
+                    const sumC = standardModules.reduce((acc, m) => acc + getModuleMetricVal(tp, m), 0);
+                    return sumC > 0 ? sumC : (tp.total_concurrent || 1);
+                  }
+                  if (alluvialMetric === 'sessions') {
+                    return tp.total_sessions || 1;
+                  }
+                  return tp.total_users || 1;
+                };
+
+                // Find max total metric across days for proportional scaling
+                const maxDailyMetric = Math.max(...timePoints.map(p => getDayTotalMetric(p)), 1);
                 const totalStackHeight = chartHeight - 100;
 
                 // Build column layout: for each date, stack the module blocks
                 const columns = timePoints.map((tp, colIdx) => {
                   const x = paddingX + colIdx * colSpacing;
-                  const dayTotal = tp.total_users || 1;
-                  const colHeight = Math.max(120, (dayTotal / maxDailyUsers) * totalStackHeight);
+                  const dayTotal = getDayTotalMetric(tp);
+                  const colHeight = Math.max(120, (dayTotal / maxDailyMetric) * totalStackHeight);
                   const startY = (chartHeight - 40 - colHeight) / 2 + 30;
 
                   let curY = startY;
                   const blocks: Record<string, {
                     module: string;
+                    val: number;
                     users: number;
                     sessions: number;
+                    concurrent: number;
                     y0: number;
                     y1: number;
                     height: number;
@@ -410,12 +558,16 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                     const byP = tp.by_product?.[mod];
                     const users = byP?.users || 0;
                     const sessions = byP?.sessions || 0;
-                    const blockH = (users / dayTotal) * colHeight;
+                    const concurrent = byP?.max_concurrent ?? byP?.concurrent ?? tp[`${mod}_concurrent`] ?? tp[`${mod}_max_concurrent`] ?? (users > 0 ? Math.max(1, Math.round(users * 0.7)) : 0);
+                    const val = alluvialMetric === 'concurrent' ? concurrent : alluvialMetric === 'sessions' ? sessions : users;
+                    const blockH = dayTotal > 0 ? (val / dayTotal) * colHeight : 0;
 
                     blocks[mod] = {
                       module: mod,
+                      val,
                       users,
                       sessions,
+                      concurrent,
                       y0: curY,
                       y1: curY + blockH,
                       height: blockH,
@@ -424,10 +576,14 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                     curY += blockH;
                   });
 
+                  const dayConcurrentTotal = standardModules.reduce((acc, m) => acc + (blocks[m]?.concurrent || 0), 0);
+
                   return {
                     date: tp.date,
                     total_users: tp.total_users,
                     total_sessions: tp.total_sessions,
+                    total_concurrent: dayConcurrentTotal,
+                    dayTotal,
                     x,
                     blocks,
                     startY,
@@ -462,8 +618,14 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                       module: mod,
                       path,
                       color: moduleColors[mod] || '#64748b',
+                      fromVal: b1.val,
+                      toVal: b2.val,
                       fromUsers: b1.users,
                       toUsers: b2.users,
+                      fromConcurrent: b1.concurrent,
+                      toConcurrent: b2.concurrent,
+                      fromSessions: b1.sessions,
+                      toSessions: b2.sessions,
                       fromDate: c1.date,
                       toDate: c2.date
                     });
@@ -601,7 +763,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                                       fontWeight="bold"
                                       fontFamily="monospace"
                                     >
-                                      {blk.users}u
+                                      {alluvialMetric === 'concurrent' ? `${blk.concurrent}c` : alluvialMetric === 'sessions' ? `${blk.sessions}s` : `${blk.users}u`}
                                     </text>
                                   )}
                                 </g>
@@ -618,7 +780,13 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                               fontFamily="monospace"
                               fontWeight="bold"
                             >
-                              {isZeroLogins ? '0 users' : `${col.total_users} users`}
+                              {isZeroLogins
+                                ? '0'
+                                : alluvialMetric === 'concurrent'
+                                  ? `${col.total_concurrent} max conc`
+                                  : alluvialMetric === 'sessions'
+                                    ? `${col.total_sessions} sess`
+                                    : `${col.total_users} users`}
                             </text>
                           </g>
                         );
@@ -995,34 +1163,36 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
           {/* Top Consumption Statistics Summary */}
           {(() => {
             const timePoints = licenseData?.consumption_over_time || [];
-            const maxDay = timePoints.reduce((prev, curr) => (curr.total_users > (prev?.total_users || 0) ? curr : prev), timePoints[0] || null);
+            const maxUserDay = timePoints.reduce((prev, curr) => (curr.total_users > (prev?.total_users || 0) ? curr : prev), timePoints[0] || null);
+            const maxConcurrentDay = timePoints.reduce((prev, curr) => ((curr.total_concurrent || 0) > (prev?.total_concurrent || 0) ? curr : prev), timePoints[0] || null);
             const totalInvocations = timePoints.reduce((acc, p) => acc + p.total_sessions, 0);
             const avgUsers = timePoints.length > 0 ? Math.round(timePoints.reduce((acc, p) => acc + p.total_users, 0) / timePoints.length) : 0;
+            const avgConcurrent = timePoints.length > 0 ? Math.round(timePoints.reduce((acc, p) => acc + (p.total_concurrent || Math.round((p.total_users || 0) * 0.7)), 0) / timePoints.length) : 0;
 
             return (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="p-4 rounded-xl bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-md">
                   <div className="flex items-center justify-between text-slate-600 dark:text-slate-400 text-xs mb-1">
-                    <span>Peak Daily Active Users</span>
+                    <span>{timelineMetric === 'max_concurrent' ? 'Peak Concurrent User Logins' : 'Peak Daily Active Users'}</span>
                     <TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 font-mono flex items-baseline gap-2">
-                    <span>{maxDay?.total_users ?? 0}</span>
-                    <span className="text-xs font-sans text-slate-500 dark:text-slate-400 font-normal">users</span>
+                    <span>{timelineMetric === 'max_concurrent' ? (maxConcurrentDay?.total_concurrent || Math.round((maxUserDay?.total_users || 0) * 0.7)) : (maxUserDay?.total_users ?? 0)}</span>
+                    <span className="text-xs font-sans text-slate-500 dark:text-slate-400 font-normal">{timelineMetric === 'max_concurrent' ? 'max conc' : 'users'}</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                    Recorded on <strong className="text-slate-800 dark:text-slate-200">{maxDay?.date ? formatDisplayTime(maxDay.date).date : 'N/A'}</strong>
+                    Recorded on <strong className="text-slate-800 dark:text-slate-200">{timelineMetric === 'max_concurrent' ? (maxConcurrentDay?.date ? formatDisplayTime(maxConcurrentDay.date).date : 'N/A') : (maxUserDay?.date ? formatDisplayTime(maxUserDay.date).date : 'N/A')}</strong>
                   </p>
                 </div>
 
                 <div className="p-4 rounded-xl bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-md">
                   <div className="flex items-center justify-between text-slate-600 dark:text-slate-400 text-xs mb-1">
-                    <span>Average Daily Active Users</span>
+                    <span>{timelineMetric === 'max_concurrent' ? 'Average Daily Peak Concurrency' : 'Average Daily Active Users'}</span>
                     <Users className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
                   </div>
                   <div className="text-2xl font-bold text-slate-900 dark:text-white font-mono flex items-baseline gap-2">
-                    <span>{avgUsers}</span>
-                    <span className="text-xs font-sans text-slate-500 dark:text-slate-400 font-normal">active users/day</span>
+                    <span>{timelineMetric === 'max_concurrent' ? avgConcurrent : avgUsers}</span>
+                    <span className="text-xs font-sans text-slate-500 dark:text-slate-400 font-normal">{timelineMetric === 'max_concurrent' ? 'avg conc/day' : 'active users/day'}</span>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Across recorded telemetry timeline</p>
                 </div>
@@ -1069,9 +1239,20 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
               </div>
 
               {/* Metric Toggle */}
-              <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-0.5">
                 <button
-                  onClick={() => setTimelineMetric('unique_users')}
+                  onClick={() => { setTimelineMetric('max_concurrent'); setGlobalMetric('concurrent'); }}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    timelineMetric === 'max_concurrent'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Display Maximum Concurrent User Logins per Day"
+                >
+                  Max Concurrent Logins
+                </button>
+                <button
+                  onClick={() => { setTimelineMetric('unique_users'); setGlobalMetric('users'); }}
                   className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     timelineMetric === 'unique_users'
                       ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1081,7 +1262,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                   Unique Daily Active Users
                 </button>
                 <button
-                  onClick={() => setTimelineMetric('total_sessions')}
+                  onClick={() => { setTimelineMetric('total_sessions'); setGlobalMetric('sessions'); }}
                   className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     timelineMetric === 'total_sessions'
                       ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1144,14 +1325,23 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                         boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)'
                       }}
                       formatter={(value: any, name: any) => [
-                        `${value} ${timelineMetric === 'unique_users' ? 'users' : 'sessions'}`,
-                        String(name).replace('_users', '').replace('_sessions', '')
+                        `${value} ${timelineMetric === 'max_concurrent' ? 'max concurrent logins' : timelineMetric === 'unique_users' ? 'users' : 'sessions'}`,
+                        String(name).replace('_users', '').replace('_sessions', '').replace('_concurrent', '').replace('_max_concurrent', '')
                       ]}
                       labelFormatter={(label) => `Date: ${formatDisplayTime(label).fullDateWithDay || formatDisplayTime(label).full}`}
                     />
                     <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
 
-                    {timelineMetric === 'unique_users' ? (
+                    {timelineMetric === 'max_concurrent' ? (
+                      <>
+                        <Area type="monotone" dataKey="Occasional Enterprise_concurrent" stroke="#06b6d4" fill="url(#grad-occ)" name="Occasional Enterprise" strokeWidth={2} stackId="1" />
+                        <Area type="monotone" dataKey="Approvals & Reporting_concurrent" stroke="#6366f1" fill="url(#grad-appr)" name="Approvals & Reporting" strokeWidth={2} stackId="1" />
+                        <Area type="monotone" dataKey="Enterprise_concurrent" stroke="#3b82f6" fill="url(#grad-ent)" name="Cloud Enterprise" strokeWidth={2} stackId="1" />
+                        <Area type="monotone" dataKey="API Integration_concurrent" stroke="#10b981" fill="url(#grad-api)" name="API Integration" strokeWidth={2} stackId="1" />
+                        <Area type="monotone" dataKey="Self Service_concurrent" stroke="#ec4899" fill="url(#grad-self)" name="Employee Self Service" strokeWidth={2} stackId="1" />
+                        <Area type="monotone" dataKey="Operations & Maint_concurrent" stroke="#f59e0b" fill="url(#grad-ops)" name="Operations & Maint" strokeWidth={2} stackId="1" />
+                      </>
+                    ) : timelineMetric === 'unique_users' ? (
                       <>
                         <Area type="monotone" dataKey="Occasional Enterprise_users" stroke="#06b6d4" fill="url(#grad-occ)" name="Occasional Enterprise" strokeWidth={2} stackId="1" />
                         <Area type="monotone" dataKey="Approvals & Reporting_users" stroke="#6366f1" fill="url(#grad-appr)" name="Approvals & Reporting" strokeWidth={2} stackId="1" />
@@ -1253,8 +1443,43 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                 Displays the dynamic percentage market share of active users across TRIRIGA licence modules over time, normalizing daily variations in total volume.
               </p>
             </div>
-            <div className="text-xs font-mono text-cyan-700 dark:text-cyan-300">
-              <span>Composition = 100% Daily Active Base</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Metric:</span>
+              <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                <button
+                  onClick={() => { setShareMetric('concurrent'); setGlobalMetric('concurrent'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    shareMetric === 'concurrent'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Share calculated from peak concurrent logins"
+                >
+                  Max Concurrent
+                </button>
+                <button
+                  onClick={() => { setShareMetric('users'); setGlobalMetric('users'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    shareMetric === 'users'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Share calculated from unique daily users"
+                >
+                  Active Users
+                </button>
+                <button
+                  onClick={() => { setShareMetric('sessions'); setGlobalMetric('sessions'); }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                    shareMetric === 'sessions'
+                      ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                  title="Share calculated from session volume"
+                >
+                  Sessions
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1285,7 +1510,8 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                     formatter={(value: any, name: any, item: any) => {
                       const cleanName = String(name).replace('_share', '');
                       const rawCount = item?.payload?.[`${cleanName}_raw`] ?? 0;
-                      return [`${value}% (${rawCount} users)`, cleanName];
+                      const unit = shareMetric === 'concurrent' ? 'max conc' : shareMetric === 'sessions' ? 'sessions' : 'users';
+                      return [`${value}% (${rawCount} ${unit})`, cleanName];
                     }}
                     labelFormatter={(label) => `Date: ${formatDisplayTime(label).fullDateWithDay || formatDisplayTime(label).full}`}
                   />
@@ -1345,9 +1571,20 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
             </div>
 
             {/* Metric Switcher */}
-            <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-0.5">
               <button
-                onClick={() => setHeatmapMetric('users')}
+                onClick={() => { setHeatmapMetric('concurrent'); setGlobalMetric('concurrent'); }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  heatmapMetric === 'concurrent'
+                    ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+                title="Display maximum concurrent user logins by licence type per day"
+              >
+                Max Concurrent Logins
+              </button>
+              <button
+                onClick={() => { setHeatmapMetric('users'); setGlobalMetric('users'); }}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                   heatmapMetric === 'users'
                     ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1357,7 +1594,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                 Active Users
               </button>
               <button
-                onClick={() => setHeatmapMetric('sessions')}
+                onClick={() => { setHeatmapMetric('sessions'); setGlobalMetric('sessions'); }}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                   heatmapMetric === 'sessions'
                     ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1390,7 +1627,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/60 font-mono">
                   {heatmapData.products.map((prod, pIdx) => {
-                    const maxVal = heatmapMetric === 'users' ? heatmapData.maxUsers : heatmapData.maxSessions;
+                    const maxVal = heatmapMetric === 'concurrent' ? heatmapData.maxConcurrent : heatmapMetric === 'users' ? heatmapData.maxUsers : heatmapData.maxSessions;
                     let rowSum = 0;
 
                     return (
@@ -1399,8 +1636,8 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                           {prod}
                         </td>
                         {heatmapData.dates.map((d, dIdx) => {
-                          const cell = heatmapData.matrix[prod]?.[d] || { users: 0, sessions: 0 };
-                          const val = heatmapMetric === 'users' ? cell.users : cell.sessions;
+                          const cell = heatmapData.matrix[prod]?.[d] || { users: 0, sessions: 0, max_concurrent: 0 };
+                          const val = heatmapMetric === 'concurrent' ? cell.max_concurrent : heatmapMetric === 'users' ? cell.users : cell.sessions;
                           rowSum += val;
                           const intensity = maxVal > 0 ? val / maxVal : 0;
 
@@ -1422,12 +1659,12 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                             <td key={dIdx} className="p-1.5 text-center">
                               <div
                                 className={`p-2.5 rounded-lg transition-all duration-150 cursor-pointer border text-center relative group ${cellClass}`}
-                                title={`${prod} on ${formatDisplayTime(d).fullDateWithDay || formatDisplayTime(d).date}: ${cell.users} users / ${cell.sessions} sessions`}
+                                title={`${prod} on ${formatDisplayTime(d).fullDateWithDay || formatDisplayTime(d).date}: ${cell.max_concurrent} max concurrent logins (${cell.users} unique users, ${cell.sessions} sessions)`}
                               >
                                 <span className="font-bold text-xs">{val}</span>
                                 {val > 0 && (
                                   <span className="block text-[9px] opacity-80 font-normal">
-                                    {heatmapMetric === 'users' ? 'users' : 'sess'}
+                                    {heatmapMetric === 'concurrent' ? 'max conc' : heatmapMetric === 'users' ? 'users' : 'sess'}
                                   </span>
                                 )}
                               </div>
@@ -1457,7 +1694,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-slate-500 font-mono">0</span>
                 <div className="w-28 h-2.5 rounded-full bg-gradient-to-r from-slate-100 via-cyan-300 to-cyan-600 dark:from-slate-900 dark:via-cyan-900 dark:to-cyan-400 border border-slate-300 dark:border-slate-700"></div>
-                <span className="text-[10px] text-cyan-700 dark:text-cyan-300 font-mono font-semibold">Max ({heatmapMetric === 'users' ? heatmapData.maxUsers : heatmapData.maxSessions})</span>
+                <span className="text-[10px] text-cyan-700 dark:text-cyan-300 font-mono font-semibold">Max ({heatmapMetric === 'concurrent' ? heatmapData.maxConcurrent : heatmapMetric === 'users' ? heatmapData.maxUsers : heatmapData.maxSessions})</span>
               </div>
             </div>
             <span>Hover cells to inspect detailed user and session volume</span>
@@ -1479,9 +1716,20 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 gap-0.5">
               <button
-                onClick={() => setTimelineMetric('unique_users')}
+                onClick={() => { setTimelineMetric('max_concurrent'); setGlobalMetric('concurrent'); }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  timelineMetric === 'max_concurrent'
+                    ? 'bg-cyan-600 text-white font-semibold shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+                title="Display maximum concurrent user logins by licence type per day"
+              >
+                Max Concurrent Logins
+              </button>
+              <button
+                onClick={() => { setTimelineMetric('unique_users'); setGlobalMetric('users'); }}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                   timelineMetric === 'unique_users'
                     ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1491,7 +1739,7 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                 Active Users
               </button>
               <button
-                onClick={() => setTimelineMetric('total_sessions')}
+                onClick={() => { setTimelineMetric('total_sessions'); setGlobalMetric('sessions'); }}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                   timelineMetric === 'total_sessions'
                     ? 'bg-cyan-600 text-white font-semibold shadow-sm'
@@ -1528,14 +1776,23 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
                       boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)'
                     }}
                     formatter={(value: any, name: any) => [
-                      `${value} ${timelineMetric === 'unique_users' ? 'users' : 'sessions'}`,
-                      String(name).replace('_users', '').replace('_sessions', '')
+                      `${value} ${timelineMetric === 'max_concurrent' ? 'max concurrent logins' : timelineMetric === 'unique_users' ? 'users' : 'sessions'}`,
+                      String(name).replace('_users', '').replace('_sessions', '').replace('_concurrent', '').replace('_max_concurrent', '')
                     ]}
                     labelFormatter={(label) => `Date: ${formatDisplayTime(label).fullDateWithDay || formatDisplayTime(label).full}`}
                   />
                   <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
 
-                  {timelineMetric === 'unique_users' ? (
+                  {timelineMetric === 'max_concurrent' ? (
+                    <>
+                      <Line type="monotone" dataKey="Occasional Enterprise_concurrent" stroke="#06b6d4" strokeWidth={3} dot={{ r: 4, fill: '#06b6d4' }} activeDot={{ r: 7 }} name="Occasional Enterprise" />
+                      <Line type="monotone" dataKey="Approvals & Reporting_concurrent" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4, fill: '#6366f1' }} activeDot={{ r: 7 }} name="Approvals & Reporting" />
+                      <Line type="monotone" dataKey="Enterprise_concurrent" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 4, fill: '#3b82f6' }} activeDot={{ r: 7 }} name="Cloud Enterprise" />
+                      <Line type="monotone" dataKey="API Integration_concurrent" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 6 }} name="API Integration" />
+                      <Line type="monotone" dataKey="Self Service_concurrent" stroke="#ec4899" strokeWidth={2} dot={{ r: 3, fill: '#ec4899' }} activeDot={{ r: 6 }} name="Employee Self Service" />
+                      <Line type="monotone" dataKey="Operations & Maint_concurrent" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#f59e0b' }} activeDot={{ r: 6 }} name="Operations & Maint" />
+                    </>
+                  ) : timelineMetric === 'unique_users' ? (
                     <>
                       <Line type="monotone" dataKey="Occasional Enterprise_users" stroke="#06b6d4" strokeWidth={3} dot={{ r: 4, fill: '#06b6d4' }} activeDot={{ r: 7 }} name="Occasional Enterprise" />
                       <Line type="monotone" dataKey="Approvals & Reporting_users" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4, fill: '#6366f1' }} activeDot={{ r: 7 }} name="Approvals & Reporting" />

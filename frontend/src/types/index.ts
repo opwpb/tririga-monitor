@@ -406,7 +406,11 @@ export interface LicenseTimeConsumptionPoint {
   date: string;
   total_users: number;
   total_sessions: number;
-  by_product?: Record<string, { product_id: number; users: number; sessions: number }>;
+  total_concurrent?: number;
+  day_name?: string;
+  day_full?: string;
+  formatted_label?: string;
+  by_product?: Record<string, { product_id: number; users: number; sessions: number; max_concurrent?: number; concurrent?: number }>;
   [key: string]: any;
 }
 
