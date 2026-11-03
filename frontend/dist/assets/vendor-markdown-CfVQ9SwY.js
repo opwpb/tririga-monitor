@@ -1,4 +1,4 @@
-import{r as ki,g as rr}from"./vendor-icons-qK6qyOjo.js";var pn={exports:{}},Ne={};/**
+import{r as ki,g as rr}from"./vendor-icons-BjjSHm-n.js";var pn={exports:{}},Ne={};/**
  * @license React
  * react-jsx-runtime.production.min.js
  *
