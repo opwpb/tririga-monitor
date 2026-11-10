@@ -155,12 +155,22 @@ class MasSizingService:
 
         # 1. Determine peak concurrent users observed by module from audited consumption points
         peak_concurrent_by_mod: Dict[str, int] = {}
+        peak_concurrent_by_pid: Dict[int, int] = {}
         overall_peak_concurrent = 0
 
         for pt in consumption_history:
             tot_c = int(pt.get("total_concurrent") or 0)
             if tot_c > overall_peak_concurrent:
                 overall_peak_concurrent = tot_c
+
+            by_prod = pt.get("by_product") or {}
+            if isinstance(by_prod, dict):
+                for p_key, p_info in by_prod.items():
+                    if isinstance(p_info, dict):
+                        p_id_val = int(p_info.get("product_id") or 0)
+                        c_val = int(p_info.get("max_concurrent") or p_info.get("concurrent") or 0)
+                        if p_id_val > 0:
+                            peak_concurrent_by_pid[p_id_val] = max(peak_concurrent_by_pid.get(p_id_val, 0), c_val)
 
             for k, v in pt.items():
                 if k.endswith("_concurrent") or k.endswith("_max_concurrent"):
@@ -183,6 +193,7 @@ class MasSizingService:
         assigned_auth_points = 0
         assigned_conc_points = 0
         audited_conc_points = 0
+        hybrid_floating_conc_points = 0
 
         total_contractual_seats = 0
         total_assigned_seats = 0
@@ -212,21 +223,24 @@ class MasSizingService:
             ap_conc = tier_meta["concurrent_points"]
             ap_auth = tier_meta["authorized_points"]
 
-            # Match peak concurrent for this product
+            # Match peak concurrent for this product by product_id first, then normalized module name
             clean_search_name = (
                 lname.replace("IBM Facilities & RE on Cloud ", "")
                 .replace("IBM Facilities and Real Estate Management on Cloud ", "")
+                .replace("&", "and")
                 .strip()
             )
-            peak_val = 0
-            for pk, pv in peak_concurrent_by_mod.items():
-                if pk.lower() in clean_search_name.lower() or clean_search_name.lower() in pk.lower():
-                    peak_val = max(peak_val, pv)
+            peak_val = peak_concurrent_by_pid.get(pid, 0)
+            if peak_val == 0:
+                for pk, pv in peak_concurrent_by_mod.items():
+                    norm_pk = pk.replace("&", "and").lower()
+                    if norm_pk in clean_search_name.lower() or clean_search_name.lower() in norm_pk:
+                        peak_val = max(peak_val, pv)
 
             if peak_val == 0 and active_cnt > 0:
                 peak_val = active_cnt
-            elif peak_val == 0 and assigned_cnt > 0:
-                # Proportional estimate if no log records
+            elif peak_val == 0 and assigned_cnt > 0 and not consumption_history:
+                # Proportional estimate ONLY if no session history telemetry exists at all
                 peak_val = max(1, round(assigned_cnt * 0.1)) if tier_key != "self_service" else 0
 
             # Compute Points
@@ -235,6 +249,10 @@ class MasSizingService:
             m_assigned_auth = assigned_cnt * ap_auth
             m_assigned_conc = assigned_cnt * ap_conc
             m_audited_conc = peak_val * ap_conc
+
+            # For Hybrid Pool (Scenario D), 10 Enterprise (3050) seats are covered as Authorized named users
+            hybrid_conc_seats = max(0, peak_val - 10) if pid == 3050 else peak_val
+            hybrid_floating_conc_points += hybrid_conc_seats * ap_conc
 
             contractual_auth_points += m_contractual_auth
             contractual_conc_points += m_contractual_conc
@@ -291,8 +309,8 @@ class MasSizingService:
         opt_auth_pts = 10 * cls.MREF_TIER_APPOINTRY["base"]["authorized_points"]  # 30 pts
         opt_admin_pts = 2 * cls.MREF_TIER_APPOINTRY["admin"]["authorized_points"]  # 30 pts (2 suite admins)
         
-        # Concurrent floating pool for occasional & remaining peak users
-        floating_pool = audited_conc_points
+        # Concurrent floating pool for occasional & remaining peak users (excluding the 10 Enterprise users covered by Authorized seats)
+        floating_pool = hybrid_floating_conc_points
         subtotal_recommended = opt_auth_pts + opt_admin_pts + floating_pool + reserve_points
         buffer_pts = math.ceil(subtotal_recommended * (buffer_percent / 100.0))
         total_recommended_apppoints = subtotal_recommended + buffer_pts

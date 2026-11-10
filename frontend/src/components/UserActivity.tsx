@@ -572,6 +572,30 @@ Please evaluate:
   const overallSat = summary?.overall_saturation_pct ?? (totalEntitled > 0 ? Math.round((totalAssigned / totalEntitled) * 100) : 0);
   const overAllocatedCount = summary?.over_allocated_count ?? 0;
 
+  // Derive User Concurrency & Daily Peak KPI metrics (de-duplicated across SESSION_HISTORY)
+  const timePoints = licenseData?.consumption_over_time || [];
+  const activeTelemetryDays = timePoints.filter(p => (p.total_users || 0) > 0);
+  const peakConcurrentPt = timePoints.reduce((prev, curr) => ((curr.total_concurrent || 0) > (prev?.total_concurrent || 0) ? curr : prev), timePoints[0] || null);
+  const peakUniquePt = timePoints.reduce((prev, curr) => ((curr.total_users || 0) > (prev?.total_users || 0) ? curr : prev), timePoints[0] || null);
+
+  const peakDailyConcurrent = summary?.peak_daily_concurrent ?? (peakConcurrentPt?.total_concurrent || totalActive);
+  const peakDailyConcurrentDate = summary?.peak_daily_concurrent_date ?? peakConcurrentPt?.date ?? null;
+  const peakDailyUniqueUsers = summary?.peak_daily_unique_users ?? (peakUniquePt?.total_users || totalActive);
+  const peakDailyUniqueDate = summary?.peak_daily_unique_date ?? peakUniquePt?.date ?? null;
+  const avgDailyConcurrent = summary?.avg_daily_concurrent ?? (
+    activeTelemetryDays.length > 0
+      ? Number((activeTelemetryDays.reduce((acc, p) => acc + (p.total_concurrent || 0), 0) / activeTelemetryDays.length).toFixed(1))
+      : totalActive
+  );
+  const avgDailyUniqueUsers = summary?.avg_daily_unique_users ?? (
+    activeTelemetryDays.length > 0
+      ? Number((activeTelemetryDays.reduce((acc, p) => acc + (p.total_users || 0), 0) / activeTelemetryDays.length).toFixed(1))
+      : totalActive
+  );
+  const activeDaysCount = summary?.active_telemetry_days ?? activeTelemetryDays.length;
+  const concToEntitledPct = summary?.concurrency_to_entitled_ratio_pct ?? (totalEntitled > 0 ? Number(((peakDailyConcurrent / totalEntitled) * 100).toFixed(1)) : 0);
+  const concToAssignedPct = summary?.concurrency_to_assigned_ratio_pct ?? (totalAssigned > 0 ? Number(((peakDailyConcurrent / totalAssigned) * 100).toFixed(1)) : 0);
+
   return (
     <div className="space-y-6">
       {/* Header & Controls Bar */}
@@ -800,6 +824,107 @@ Please evaluate:
             data={getSparkData('saturation', overallSat)} 
             color={overallSat > 100 ? '#f43f5e' : overallSat >= 85 ? '#f59e0b' : '#0ea5e9'} 
           />
+        </div>
+      </div>
+
+      {/* User Concurrency & Daily Peak Utilization KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Max Daily Concurrent Users */}
+        <div
+          onClick={() => setActiveTab('visual_analytics')}
+          className={`p-4 rounded-xl border shadow-md cursor-pointer transition-all ${
+            activeTab === 'visual_analytics'
+              ? 'bg-slate-900/90 border-cyan-500/50 shadow-cyan-500/10'
+              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+            <span className="font-medium">Max Daily Concurrent Users</span>
+            <Zap className="w-4 h-4 text-amber-400" />
+          </div>
+          <div className="text-2xl font-bold text-amber-400 font-mono flex items-baseline gap-2">
+            <span>{peakDailyConcurrent}</span>
+            <span className="text-xs font-sans text-slate-400 font-normal">peak simultaneous users</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1 truncate">
+            {peakDailyConcurrentDate ? (
+              <>Recorded on <strong className="text-slate-200">{formatDisplayTime(peakDailyConcurrentDate).date}</strong> (de-duplicated)</>
+            ) : (
+              <>De-duplicated interval overlap peak</>
+            )}
+          </p>
+        </div>
+
+        {/* Max Unique Daily Users */}
+        <div
+          onClick={() => setActiveTab('visual_analytics')}
+          className={`p-4 rounded-xl border shadow-md cursor-pointer transition-all ${
+            activeTab === 'visual_analytics'
+              ? 'bg-slate-900/90 border-cyan-500/50 shadow-cyan-500/10'
+              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+            <span className="font-medium">Max Unique Daily Users</span>
+            <UserCheck className="w-4 h-4 text-cyan-400" />
+          </div>
+          <div className="text-2xl font-bold text-cyan-300 font-mono flex items-baseline gap-2">
+            <span>{peakDailyUniqueUsers}</span>
+            <span className="text-xs font-sans text-slate-400 font-normal">distinct users / day</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1 truncate">
+            {peakDailyUniqueDate ? (
+              <>Peak on <strong className="text-slate-200">{formatDisplayTime(peakDailyUniqueDate).date}</strong> (`COUNT(DISTINCT user_id)`)</>
+            ) : (
+              <>Unique daily user logins (`SESSION_HISTORY`)</>
+            )}
+          </p>
+        </div>
+
+        {/* Avg Active-Day Concurrency */}
+        <div
+          onClick={() => setActiveTab('visual_analytics')}
+          className={`p-4 rounded-xl border shadow-md cursor-pointer transition-all ${
+            activeTab === 'visual_analytics'
+              ? 'bg-slate-900/90 border-cyan-500/50 shadow-cyan-500/10'
+              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+            <span className="font-medium">Avg Active-Day Concurrency</span>
+            <Activity className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="text-2xl font-bold text-white font-mono flex items-baseline gap-2">
+            <span>{avgDailyConcurrent}</span>
+            <span className="text-xs font-sans text-slate-400 font-normal">conc/day ({avgDailyUniqueUsers} unique/day)</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">
+            Averaged across <strong className="text-slate-300">{activeDaysCount}</strong> active login days (excl. 0-login days)
+          </p>
+        </div>
+
+        {/* Concurrency vs Entitlement Pooling Ratio */}
+        <div
+          onClick={() => setActiveTab('mas_sizing')}
+          className={`p-4 rounded-xl border shadow-md cursor-pointer transition-all ${
+            activeTab === 'mas_sizing'
+              ? 'bg-slate-900/90 border-indigo-500/50 shadow-indigo-500/10'
+              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+            <span className="font-medium">Peak Concurrency Ratio</span>
+            <Sparkles className="w-4 h-4 text-indigo-400" />
+          </div>
+          <div className="text-2xl font-bold text-indigo-300 font-mono flex items-baseline gap-2">
+            <span>{concToEntitledPct}%</span>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+              1:{Math.max(1, Math.round((summary?.paid_contracted_assigned || totalAssigned) / Math.max(1, peakDailyConcurrent)))} Pool Ratio
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">
+            {peakDailyConcurrent} peak conc vs {totalEntitled} entitled ({concToAssignedPct}% of assigned)
+          </p>
         </div>
       </div>
 

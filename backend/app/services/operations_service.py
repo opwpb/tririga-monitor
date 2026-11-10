@@ -1201,32 +1201,75 @@ WITH UR"""
             "WITH UR"
         )
 
-        # 5b. Query daily maximum concurrent user logins by licence product module
+        # 5b. Query daily maximum concurrent user logins by licence product module (interval overlap + hourly window)
         concurrent_sql = (
             "SELECT h.LOGIN_DATE, "
             "h.product_id, "
             "MAX(h.HOURLY_USERS) as MAX_CONCURRENT "
             "FROM ( "
-            "    SELECT to_char(sh.start_time, 'YYYY-MM-DD') as LOGIN_DATE, "
-            "           to_char(sh.start_time, 'YYYY-MM-DD HH24') as LOGIN_HOUR, "
+            "    SELECT to_char(s1.start_time, 'YYYY-MM-DD') as LOGIN_DATE, "
+            "           s1.start_time as LOGIN_HOUR, "
             "           u.product_id, "
-            "           count(DISTINCT sh.user_id) as HOURLY_USERS "
-            "    FROM session_history sh "
-            "    JOIN user_product u ON sh.user_id = u.user_id "
-            "    GROUP BY to_char(sh.start_time, 'YYYY-MM-DD'), to_char(sh.start_time, 'YYYY-MM-DD HH24'), u.product_id "
+            "           count(DISTINCT s2.user_id) as HOURLY_USERS "
+            "    FROM session_history s1 "
+            "    JOIN session_history s2 "
+            "      ON to_char(s1.start_time, 'YYYY-MM-DD') = to_char(s2.start_time, 'YYYY-MM-DD') "
+            "     AND ( "
+            "          (s2.start_time <= s1.start_time AND s2.end_time IS NOT NULL AND s2.end_time >= s1.start_time) "
+            "          OR to_char(s2.start_time, 'YYYY-MM-DD HH24') = to_char(s1.start_time, 'YYYY-MM-DD HH24') "
+            "     ) "
+            "    JOIN user_product u ON s2.user_id = u.user_id "
+            "    GROUP BY to_char(s1.start_time, 'YYYY-MM-DD'), s1.start_time, u.product_id "
             ") h "
             "GROUP BY h.LOGIN_DATE, h.product_id "
             "ORDER BY h.LOGIN_DATE ASC "
             "WITH UR"
         )
 
-        over_time_res, concurrent_res = await asyncio.gather(
+        # 5c. Query true de-duplicated system-wide daily unique users, sessions, and interval-overlap peak concurrency
+        # (Without JOIN USER_PRODUCT fan-out so users holding multiple licences are never double-counted)
+        system_daily_sql = (
+            "SELECT d.LOGIN_DATE, "
+            "d.SYS_DAILY_USERS, "
+            "d.SYS_DAILY_SESSIONS, "
+            "c.SYS_PEAK_CONC "
+            "FROM ( "
+            "    SELECT to_char(sh.start_time, 'YYYY-MM-DD') as LOGIN_DATE, "
+            "           count(DISTINCT sh.user_id) as SYS_DAILY_USERS, "
+            "           count(sh.start_time) as SYS_DAILY_SESSIONS "
+            "    FROM session_history sh "
+            "    GROUP BY to_char(sh.start_time, 'YYYY-MM-DD') "
+            ") d "
+            "LEFT JOIN ( "
+            "    SELECT ov.LOGIN_DATE, MAX(ov.ACTIVE_USERS) as SYS_PEAK_CONC "
+            "    FROM ( "
+            "        SELECT to_char(s1.start_time, 'YYYY-MM-DD') as LOGIN_DATE, "
+            "               s1.start_time as CHECK_TIME, "
+            "               count(DISTINCT s2.user_id) as ACTIVE_USERS "
+            "        FROM session_history s1 "
+            "        JOIN session_history s2 "
+            "          ON to_char(s1.start_time, 'YYYY-MM-DD') = to_char(s2.start_time, 'YYYY-MM-DD') "
+            "         AND ( "
+            "              (s2.start_time <= s1.start_time AND s2.end_time IS NOT NULL AND s2.end_time >= s1.start_time) "
+            "              OR to_char(s2.start_time, 'YYYY-MM-DD HH24') = to_char(s1.start_time, 'YYYY-MM-DD HH24') "
+            "         ) "
+            "        GROUP BY to_char(s1.start_time, 'YYYY-MM-DD'), s1.start_time "
+            "    ) ov "
+            "    GROUP BY ov.LOGIN_DATE "
+            ") c ON d.LOGIN_DATE = c.LOGIN_DATE "
+            "ORDER BY d.LOGIN_DATE ASC "
+            "WITH UR"
+        )
+
+        over_time_res, concurrent_res, system_daily_res = await asyncio.gather(
             TririgaAdminClient.execute_query_via_admin_console(server_info, over_time_sql),
             TririgaAdminClient.execute_query_via_admin_console(server_info, concurrent_sql),
+            TririgaAdminClient.execute_query_via_admin_console(server_info, system_daily_sql),
             return_exceptions=True
         )
         raw_over_time = over_time_res.get("rows", []) if (isinstance(over_time_res, dict) and over_time_res.get("success")) else []
         raw_concurrent = concurrent_res.get("rows", []) if (isinstance(concurrent_res, dict) and concurrent_res.get("success")) else []
+        raw_system_daily = system_daily_res.get("rows", []) if (isinstance(system_daily_res, dict) and system_daily_res.get("success")) else []
 
         concurrent_map: Dict[Tuple[str, int], int] = {}
         for cr in raw_concurrent:
@@ -1242,6 +1285,29 @@ WITH UR"""
             except (ValueError, TypeError):
                 mc_val = 0
             concurrent_map[(cd_str, cp_id)] = mc_val
+
+        system_daily_map: Dict[str, Dict[str, int]] = {}
+        for sr in raw_system_daily:
+            sd_str = str(sr.get("LOGIN_DATE") or "").strip()
+            if not sd_str:
+                continue
+            try:
+                t_users = int(sr.get("SYS_DAILY_USERS") or 0)
+            except (ValueError, TypeError):
+                t_users = 0
+            try:
+                t_sess = int(sr.get("SYS_DAILY_SESSIONS") or 0)
+            except (ValueError, TypeError):
+                t_sess = 0
+            try:
+                t_conc = int(sr.get("SYS_PEAK_CONC") or 0)
+            except (ValueError, TypeError):
+                t_conc = 0
+            system_daily_map[sd_str] = {
+                "users": t_users,
+                "sessions": t_sess,
+                "concurrent": t_conc if t_conc > 0 else t_users
+            }
 
         # Product ID to Clean Name map
         pid_name_map = {
@@ -1286,12 +1352,25 @@ WITH UR"""
                     "total_users": 0,
                     "total_sessions": 0,
                     "total_concurrent": 0,
+                    "module_sum_users": 0,
+                    "module_sum_sessions": 0,
+                    "module_sum_concurrent": 0,
                     "by_product": {}
                 }
 
-            date_map[d_str]["total_users"] += u_cnt
-            date_map[d_str]["total_sessions"] += s_cnt
-            date_map[d_str]["total_concurrent"] += c_cnt
+            date_map[d_str]["module_sum_users"] += u_cnt
+            date_map[d_str]["module_sum_sessions"] += s_cnt
+            date_map[d_str]["module_sum_concurrent"] += c_cnt
+
+            if d_str in system_daily_map:
+                date_map[d_str]["total_users"] = system_daily_map[d_str]["users"]
+                date_map[d_str]["total_sessions"] = system_daily_map[d_str]["sessions"]
+                date_map[d_str]["total_concurrent"] = system_daily_map[d_str]["concurrent"]
+            else:
+                date_map[d_str]["total_users"] += u_cnt
+                date_map[d_str]["total_sessions"] += s_cnt
+                date_map[d_str]["total_concurrent"] += c_cnt
+
             date_map[d_str]["by_product"][p_name] = {
                 "product_id": p_id,
                 "users": u_cnt,
@@ -1517,6 +1596,23 @@ WITH UR"""
             "color": "#64748b"
         })
 
+        # Compute Concurrency & Daily User KPIs across active days (days with >0 logins)
+        active_days = [pt for pt in consumption_over_time if (pt.get("total_users") or 0) > 0]
+        peak_conc_pt = max(consumption_over_time, key=lambda x: x.get("total_concurrent") or 0) if consumption_over_time else None
+        peak_user_pt = max(consumption_over_time, key=lambda x: x.get("total_users") or 0) if consumption_over_time else None
+
+        peak_daily_concurrent = int(peak_conc_pt.get("total_concurrent") or 0) if peak_conc_pt else len(logged_in_users)
+        peak_daily_concurrent_date = peak_conc_pt.get("date") if (peak_conc_pt and peak_daily_concurrent > 0) else None
+
+        peak_daily_unique_users = int(peak_user_pt.get("total_users") or 0) if peak_user_pt else len(logged_in_users)
+        peak_daily_unique_date = peak_user_pt.get("date") if (peak_user_pt and peak_daily_unique_users > 0) else None
+
+        avg_daily_concurrent = round(sum(pt.get("total_concurrent") or 0 for pt in active_days) / len(active_days), 1) if active_days else float(len(logged_in_users))
+        avg_daily_unique_users = round(sum(pt.get("total_users") or 0 for pt in active_days) / len(active_days), 1) if active_days else float(len(logged_in_users))
+
+        concurrency_to_assigned_ratio = round((peak_daily_concurrent / max(1, total_assigned)) * 100, 1)
+        concurrency_to_entitled_ratio = round((peak_daily_concurrent / max(1, paid_entitled_total)) * 100, 1)
+
         result = {
             "success": res.get("success", False),
             "error": res.get("error"),
@@ -1544,6 +1640,15 @@ WITH UR"""
                 "overall_saturation_pct": overall_sat_pct,
                 "over_allocated_count": over_allocated_count,
                 "total_products": len(entitlements_list),
+                "peak_daily_concurrent": peak_daily_concurrent,
+                "peak_daily_concurrent_date": peak_daily_concurrent_date,
+                "peak_daily_unique_users": peak_daily_unique_users,
+                "peak_daily_unique_date": peak_daily_unique_date,
+                "avg_daily_concurrent": avg_daily_concurrent,
+                "avg_daily_unique_users": avg_daily_unique_users,
+                "active_telemetry_days": len(active_days),
+                "concurrency_to_assigned_ratio_pct": concurrency_to_assigned_ratio,
+                "concurrency_to_entitled_ratio_pct": concurrency_to_entitled_ratio,
                 "active_by_account_type": {
                     "internal": sum(1 for u in logged_in_users if u.get("account_type") == "internal"),
                     "external": sum(1 for u in logged_in_users if u.get("account_type") == "external"),

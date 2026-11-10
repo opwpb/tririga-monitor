@@ -397,6 +397,18 @@ export interface LicenseUsageSummary {
   overall_saturation_pct: number;
   over_allocated_count: number;
   total_products: number;
+  peak_daily_concurrent?: number;
+  peak_daily_concurrent_date?: string | null;
+  peak_daily_unique_users?: number;
+  peak_daily_unique_date?: string | null;
+  avg_daily_concurrent?: number;
+  avg_daily_unique_users?: number;
+  active_telemetry_days?: number;
+  concurrency_to_assigned_ratio_pct?: number;
+  concurrency_to_entitled_ratio_pct?: number;
+  internal_accounts_count?: number;
+  external_accounts_count?: number;
+  oslc_accounts_count?: number;
   active_by_account_type?: { internal: number; external: number; oslc: number };
   dormant_by_account_type?: { internal: number; external: number; oslc: number };
   total_by_account_type?: { internal: number; external: number; oslc: number };

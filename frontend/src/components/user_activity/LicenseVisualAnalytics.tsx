@@ -372,6 +372,95 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
         </div>
       </div>
 
+      {/* User Concurrency & Daily Peak Telemetry KPI Cards */}
+      {(() => {
+        const timePoints = licenseData?.consumption_over_time || [];
+        const activeDays = timePoints.filter(p => (p.total_users || 0) > 0);
+        const maxUserPt = timePoints.reduce((prev, curr) => ((curr.total_users || 0) > (prev?.total_users || 0) ? curr : prev), timePoints[0] || null);
+        const maxConcPt = timePoints.reduce((prev, curr) => ((curr.total_concurrent || 0) > (prev?.total_concurrent || 0) ? curr : prev), timePoints[0] || null);
+
+        const liveActive = licenseData?.logged_in_users?.length ?? licenseData?.summary?.total_active_sessions ?? 0;
+        const peakConc = licenseData?.summary?.peak_daily_concurrent ?? (maxConcPt?.total_concurrent || liveActive);
+        const peakConcDate = licenseData?.summary?.peak_daily_concurrent_date ?? maxConcPt?.date ?? null;
+        const peakUsers = licenseData?.summary?.peak_daily_unique_users ?? (maxUserPt?.total_users || liveActive);
+        const peakUsersDate = licenseData?.summary?.peak_daily_unique_date ?? maxUserPt?.date ?? null;
+        const avgConc = licenseData?.summary?.avg_daily_concurrent ?? (
+          activeDays.length > 0
+            ? Number((activeDays.reduce((acc, p) => acc + (p.total_concurrent || 0), 0) / activeDays.length).toFixed(1))
+            : liveActive
+        );
+        const avgUsers = licenseData?.summary?.avg_daily_unique_users ?? (
+          activeDays.length > 0
+            ? Number((activeDays.reduce((acc, p) => acc + (p.total_users || 0), 0) / activeDays.length).toFixed(1))
+            : liveActive
+        );
+        const entitledTotal = licenseData?.summary?.total_entitled_seats ?? 425;
+        const concEntitledRatio = entitledTotal > 0 ? ((peakConc / entitledTotal) * 100).toFixed(1) : '0.0';
+
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span className="font-semibold">Live Active Concurrency</span>
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  Real-Time
+                </span>
+              </div>
+              <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 flex items-baseline gap-2">
+                <span>{liveActive}</span>
+                <span className="text-xs font-sans font-normal text-slate-500 dark:text-slate-400">sessions online now</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                De-duplicated `ACTIVE_SESSION_USER` count
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span className="font-semibold">Max Daily Concurrent Users</span>
+                <Zap className="w-4 h-4 text-amber-500 dark:text-amber-400" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 flex items-baseline gap-2">
+                <span>{peakConc}</span>
+                <span className="text-xs font-sans font-normal text-slate-500 dark:text-slate-400">peak simultaneous ({concEntitledRatio}% of quota)</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {peakConcDate ? <>Observed on <strong className="text-slate-700 dark:text-slate-200">{formatDisplayTime(peakConcDate).date}</strong> (interval overlap)</> : 'De-duplicated session overlap'}
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span className="font-semibold">Max Unique Daily Users</span>
+                <Users className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-cyan-600 dark:text-cyan-300 flex items-baseline gap-2">
+                <span>{peakUsers}</span>
+                <span className="text-xs font-sans font-normal text-slate-500 dark:text-slate-400">distinct daily logins</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {peakUsersDate ? <>Observed on <strong className="text-slate-700 dark:text-slate-200">{formatDisplayTime(peakUsersDate).date}</strong> (`COUNT(DISTINCT user_id)`)</> : 'Without multi-licence join fan-out'}
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <span className="font-semibold">Active-Day Average Concurrency</span>
+                <TrendingUp className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+              </div>
+              <div className="text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-300 flex items-baseline gap-2">
+                <span>{avgConc}</span>
+                <span className="text-xs font-sans font-normal text-slate-500 dark:text-slate-400">conc/day ({avgUsers} unique/day)</span>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Across <strong className="text-slate-700 dark:text-slate-200">{activeDays.length}</strong> active telemetry days
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Account Type Classification Breakdown Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -1163,11 +1252,12 @@ export const LicenseVisualAnalytics: React.FC<LicenseVisualAnalyticsProps> = ({
           {/* Top Consumption Statistics Summary */}
           {(() => {
             const timePoints = licenseData?.consumption_over_time || [];
+            const activePoints = timePoints.filter(p => (p.total_users || 0) > 0);
             const maxUserDay = timePoints.reduce((prev, curr) => (curr.total_users > (prev?.total_users || 0) ? curr : prev), timePoints[0] || null);
             const maxConcurrentDay = timePoints.reduce((prev, curr) => ((curr.total_concurrent || 0) > (prev?.total_concurrent || 0) ? curr : prev), timePoints[0] || null);
             const totalInvocations = timePoints.reduce((acc, p) => acc + p.total_sessions, 0);
-            const avgUsers = timePoints.length > 0 ? Math.round(timePoints.reduce((acc, p) => acc + p.total_users, 0) / timePoints.length) : 0;
-            const avgConcurrent = timePoints.length > 0 ? Math.round(timePoints.reduce((acc, p) => acc + (p.total_concurrent || Math.round((p.total_users || 0) * 0.7)), 0) / timePoints.length) : 0;
+            const avgUsers = activePoints.length > 0 ? Number((activePoints.reduce((acc, p) => acc + p.total_users, 0) / activePoints.length).toFixed(1)) : 0;
+            const avgConcurrent = activePoints.length > 0 ? Number((activePoints.reduce((acc, p) => acc + (p.total_concurrent || p.total_users || 0), 0) / activePoints.length).toFixed(1)) : 0;
 
             return (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
